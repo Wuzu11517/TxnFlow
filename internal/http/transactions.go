@@ -1,6 +1,115 @@
 package models
 
-import "time"
+import {
+	"context",
+	"time",
+	"encoding/json",
+	"net/http",
+
+	"github.com/jackc/pgx/v5/pgxpool",
+}
+
+type Handlers struct {
+	DB *pgxpool.Pool
+}
+
+func NewHandlers(db *pgxpool.Pool) *Handlers {
+	return &Handlers{db: db}
+}
+
+type createTransactionRequest struct {
+	TransactionHash string `json:"transaction_hash"`
+	ChainID         int    `json:"chain_id"`
+	SourceService   string `json:"source_service"`
+}
+
+func (h *Handlers) CreateTransaction(w http.ResponseWriter, r *http.Request) {
+	// ---- Decode request body ----
+	var req createTransactionRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// ---- Basic validation ----
+	if req.TransactionHash == "" || req.ChainID == 0 {
+		http.Error(w, "missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	// ---- Request-scoped context with timeout ----
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	// ---- Attempt idempotent insert ----
+	insertQuery := `
+		INSERT INTO transactions (transaction_hash, chain_id, status, created_at, updated_at)
+		VALUES ($1, $2, 'RECEIVED', now(), now())
+		ON CONFLICT (transaction_hash, chain_id)
+		DO NOTHING
+		RETURNING id, status, created_at, updated_at
+	`
+
+	var (
+		id        string
+		status    string
+		createdAt time.Time
+		updatedAt time.Time
+	)
+
+	err := h.db.QueryRow(
+		ctx,
+		insertQuery,
+		req.TransactionHash,
+		req.ChainID,
+	).Scan(&id, &status, &createdAt, &updatedAt)
+
+	// ---- If insert did nothing, fetch existing row ----
+	if err != nil {
+		selectQuery := `
+			SELECT id, status, created_at, updated_at
+			FROM transactions
+			WHERE transaction_hash = $1 AND chain_id = $2
+		`
+
+		row := h.db.QueryRow(
+			ctx,
+			selectQuery,
+			req.TransactionHash,
+			req.ChainID,
+		)
+
+		if err := row.Scan(&id, &status, &createdAt, &updatedAt); err != nil {
+			http.Error(w, "failed to fetch transaction", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// ---- Record ingestion event (best-effort) ----
+	_, _ = h.db.Exec(
+		ctx,
+		`INSERT INTO ingestion_events (transaction_id, new_status, reason)
+		 VALUES ($1, $2, $3)`,
+		id,
+		status,
+		"transaction registered",
+	)
+
+	// ---- Build response ----
+	resp := map[string]interface{}{
+		"id":               id,
+		"transaction_hash": req.TransactionHash,
+		"chain_id":         req.ChainID,
+		"status":           status,
+		"created_at":       createdAt,
+	}
+
+	// ---- Write response ----
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(resp)
+}
 
 type Transaction struct {
 	ID              string    `json:"id"`
