@@ -1,20 +1,20 @@
-package models
+package http
 
-import {
+import (
 	"context",
 	"time",
 	"encoding/json",
 	"net/http",
 
 	"github.com/jackc/pgx/v5/pgxpool",
-}
+)
 
 type Handlers struct {
 	DB *pgxpool.Pool
 }
 
 func NewHandlers(db *pgxpool.Pool) *Handlers {
-	return &Handlers{db: db}
+	return &Handlers{DB: db}
 }
 
 type createTransactionRequest struct {
@@ -124,4 +124,68 @@ type Transaction struct {
 	ErrorReason     *string   `json:"error_reason,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func (h *Handlers) GetTransaction(w http.ResponseWriter, r *http.Request) {
+	// ---- Extract hash from URL ----
+	hash := chi.URLParam(r, "hash")
+	if hash == "" {
+		http.Error(w, "transaction hash is required", http.StatusBadRequest)
+		return
+	}
+
+	// ---- Request-scoped context with timeout ----
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	// ---- Query transaction by hash ----
+	query := `
+		SELECT 
+			id, 
+			transaction_hash, 
+			chain_id, 
+			status, 
+			from_address, 
+			to_address, 
+			value, 
+			block_number, 
+			gas_used, 
+			error_reason, 
+			created_at, 
+			updated_at
+		FROM transactions
+		WHERE transaction_hash = $1
+		LIMIT 1
+	`
+
+	var txn Transaction
+	err := h.DB.QueryRow(ctx, query, hash).Scan(
+		&txn.ID,
+		&txn.TransactionHash,
+		&txn.ChainID,
+		&txn.Status,
+		&txn.FromAddress,
+		&txn.ToAddress,
+		&txn.Value,
+		&txn.BlockNumber,
+		&txn.GasUsed,
+		&txn.ErrorReason,
+		&txn.CreatedAt,
+		&txn.UpdatedAt,
+	)
+
+	// ---- Handle errors ----
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "transaction not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+
+	// ---- Return transaction as JSON ----
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(txn)
 }
