@@ -32,3 +32,4 @@ CREATE TABLE ingestion_events (
   reason TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT now()
 );
+    
