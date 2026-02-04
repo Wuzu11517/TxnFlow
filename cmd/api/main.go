@@ -5,9 +5,9 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/Wuzu11517/txnflow/internal/config"
-	"github.com/Wuzu11517/txnflow/internal/db"
-	httpapi "github.com/Wuzu11517/txnflow/internal/http"
+	"github.com/Wuzu11517/TxnFlow/internal/config"
+	"github.com/Wuzu11517/TxnFlow/internal/db"
+	httpapi "github.com/Wuzu11517/TxnFlow/internal/http"
 )
 
 func main() {
