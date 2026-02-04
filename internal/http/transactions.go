@@ -344,3 +344,52 @@ func (h *Handlers) ListTransactions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(response)
 }
+
+func (h *Handlers) GetStats(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	// Count transactions by status
+	query := `
+		SELECT status, COUNT(*) 
+		FROM transactions 
+		GROUP BY status
+	`
+
+	rows, err := h.DB.Query(ctx, query)
+	if err != nil {
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	stats := make(map[string]int)
+	totalCount := 0
+
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			http.Error(w, "failed to scan result", http.StatusInternalServerError)
+			return
+		}
+		stats[status] = count
+		totalCount += count
+	}
+
+	if err := rows.Err(); err != nil {
+		http.Error(w, "error reading results", http.StatusInternalServerError)
+		return
+	}
+
+	// Build response
+	response := map[string]interface{}{
+		"total":        totalCount,
+		"by_status":    stats,
+		"timestamp":    time.Now(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(response)
+}
