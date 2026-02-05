@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: txnflow-postgres
+    environment:
+      POSTGRES_DB: txnflow
+      POSTGRES_USER: txnflow
+      POSTGRES_PASSWORD: txnflow_dev_password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U txnflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - txnflow-network
+
+  # Database migration runner
+  migrate:
+    build: .
+    container_name: txnflow-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://txnflow:txnflow_dev_password@postgres:5432/txnflow?sslmode=disable
+    command: >
+      sh -c "
+        echo '🔄 Running database migrations...' &&
+        psql $$DATABASE_URL -f /app/migrations/001_init.sql &&
+        psql $$DATABASE_URL -f /app/migrations/002_indexes.sql &&
+        echo '✅ Migrations complete!'
+      "
+    networks:
+      - txnflow-network
+
+  # API Server
+  api:
+    build: .
+    container_name: txnflow-api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://txnflow:txnflow_dev_password@postgres:5432/txnflow?sslmode=disable
+      PORT: 8080
+    ports:
+      - "8080:8080"
+    command: /app/api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/stats"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - txnflow-network
+
+  # Background Worker
+  worker:
+    build: .
+    container_name: txnflow-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://txnflow:txnflow_dev_password@postgres:5432/txnflow?sslmode=disable
+    command: /app/worker
+    restart: unless-stopped
+    networks:
+      - txnflow-network
+
+networks:
+  txnflow-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
