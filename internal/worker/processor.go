@@ -4,34 +4,36 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
 	"time"
 
+	"github.com/Wuzu11517/TxnFlow/internal/blockchain"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Worker polls for RECEIVED transactions and processes them
 type Worker struct {
 	DB            *pgxpool.Pool
+	ChainRegistry *blockchain.ChainRegistry
 	PollInterval  time.Duration
 	BatchSize     int
 	stopChan      chan struct{}
 }
 
 // NewWorker creates a new transaction processing worker
-func NewWorker(db *pgxpool.Pool) *Worker {
+func NewWorker(db *pgxpool.Pool, chainRegistry *blockchain.ChainRegistry) *Worker {
 	return &Worker{
-		DB:           db,
-		PollInterval: 5 * time.Second,  // Poll every 5 seconds
-		BatchSize:    10,                // Process up to 10 transactions per batch
-		stopChan:     make(chan struct{}),
+		DB:            db,
+		ChainRegistry: chainRegistry,
+		PollInterval:  5 * time.Second, // Poll every 5 seconds
+		BatchSize:     10,               // Process up to 10 transactions per batch
+		stopChan:      make(chan struct{}),
 	}
 }
 
 // Start begins the worker loop
 func (w *Worker) Start(ctx context.Context) {
 	log.Println("🚀 Worker started - polling for RECEIVED transactions")
-	
+
 	ticker := time.NewTicker(w.PollInterval)
 	defer ticker.Stop()
 
@@ -102,7 +104,7 @@ func (w *Worker) processBatch(ctx context.Context) error {
 	return rows.Err()
 }
 
-// processTransaction simulates fetching and normalizing a transaction
+// processTransaction fetches and normalizes a transaction from the blockchain
 func (w *Worker) processTransaction(ctx context.Context, id, hash string, chainID int) error {
 	log.Printf("📥 Processing transaction: %s (chain: %d)", hash, chainID)
 
@@ -111,8 +113,8 @@ func (w *Worker) processTransaction(ctx context.Context, id, hash string, chainI
 		return fmt.Errorf("failed to update status to FETCHING: %w", err)
 	}
 
-	// Simulate fetching from blockchain (this would be a real RPC call in production)
-	txData, err := w.simulateBlockchainFetch(hash, chainID)
+	// Fetch from blockchain
+	txData, err := w.fetchFromBlockchain(ctx, hash, chainID)
 	if err != nil {
 		// Mark as ERROR if fetch failed
 		w.updateStatus(ctx, id, "ERROR", err.Error())
@@ -132,6 +134,79 @@ func (w *Worker) processTransaction(ctx context.Context, id, hash string, chainI
 
 	log.Printf("✅ Transaction %s processed successfully", hash)
 	return nil
+}
+
+// fetchFromBlockchain fetches real transaction data from blockchain RPC
+func (w *Worker) fetchFromBlockchain(ctx context.Context, hash string, chainID int) (*BlockchainTransaction, error) {
+	// Get chain configuration
+	chainConfig, err := w.ChainRegistry.GetChain(chainID)
+	if err != nil {
+		return nil, fmt.Errorf("unsupported chain: %w", err)
+	}
+
+	// Create RPC client for this chain
+	rpcClient := blockchain.NewRPCClient(chainConfig.RPCURL)
+
+	// Fetch transaction
+	ethTx, err := rpcClient.GetTransactionByHash(ctx, hash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch transaction: %w", err)
+	}
+
+	// Fetch receipt for gas usage and status
+	receipt, err := rpcClient.GetTransactionReceipt(ctx, hash)
+	if err != nil {
+		// Receipt might not exist for pending transactions
+		log.Printf("⚠️  No receipt found for %s (may be pending): %v", hash, err)
+		// Continue without receipt data
+	}
+
+	// Convert to normalized format
+	txData := &BlockchainTransaction{
+		Hash:        ethTx.Hash,
+		ChainID:     chainID,
+		FromAddress: ethTx.From,
+		ToAddress:   ethTx.To,
+	}
+
+	// Convert hex value to decimal string
+	if ethTx.Value != "" {
+		valueDecimal, err := blockchain.HexToDecimalString(ethTx.Value)
+		if err != nil {
+			log.Printf("⚠️  Failed to parse value: %v", err)
+		} else {
+			txData.Value = valueDecimal
+		}
+	}
+
+	// Parse block number
+	if ethTx.BlockNumber != "" {
+		blockNum, err := blockchain.HexToInt64(ethTx.BlockNumber)
+		if err != nil {
+			log.Printf("⚠️  Failed to parse block number: %v", err)
+		} else {
+			txData.BlockNumber = blockNum
+		}
+	}
+
+	// Parse gas used from receipt
+	if receipt != nil && receipt.GasUsed != "" {
+		gasUsed, err := blockchain.HexToInt64(receipt.GasUsed)
+		if err != nil {
+			log.Printf("⚠️  Failed to parse gas used: %v", err)
+		} else {
+			txData.GasUsed = gasUsed
+		}
+
+		// Parse status from receipt (0x1 = success, 0x0 = failed)
+		if receipt.Status == "0x1" {
+			txData.Status = "success"
+		} else if receipt.Status == "0x0" {
+			txData.Status = "failed"
+		}
+	}
+
+	return txData, nil
 }
 
 // updateStatus updates the transaction status and logs the event
@@ -170,7 +245,7 @@ func (w *Worker) updateStatus(ctx context.Context, txID, newStatus, errorReason 
 	if errorReason != "" {
 		reason = errorReason
 	}
-	
+
 	_, err = tx.Exec(ctx, eventQuery, txID, currentStatus, newStatus, reason)
 	if err != nil {
 		return err
@@ -180,42 +255,16 @@ func (w *Worker) updateStatus(ctx context.Context, txID, newStatus, errorReason 
 	return tx.Commit(ctx)
 }
 
-// BlockchainTransaction represents simulated blockchain data
+// BlockchainTransaction represents normalized blockchain data
 type BlockchainTransaction struct {
-	Hash        string `json:"hash"`
-	ChainID     int    `json:"chain_id"`
-	FromAddress string `json:"from"`
-	ToAddress   string `json:"to"`
-	Value       string `json:"value"`
-	BlockNumber int64  `json:"block_number"`
-	GasUsed     int64  `json:"gas_used"`
-	Status      string `json:"status"`
-}
-
-// simulateBlockchainFetch simulates fetching transaction data from blockchain RPC
-// In production, this would call eth_getTransactionByHash or similar
-func (w *Worker) simulateBlockchainFetch(hash string, chainID int) (*BlockchainTransaction, error) {
-	// Simulate network delay
-	time.Sleep(time.Duration(100+rand.Intn(400)) * time.Millisecond)
-
-	// Simulate occasional failures (5% chance)
-	if rand.Float32() < 0.05 {
-		return nil, fmt.Errorf("blockchain RPC error: transaction not found")
-	}
-
-	// Generate realistic-looking mock data
-	tx := &BlockchainTransaction{
-		Hash:        hash,
-		ChainID:     chainID,
-		FromAddress: w.generateAddress(),
-		ToAddress:   w.generateAddress(),
-		Value:       w.generateValue(),
-		BlockNumber: 12345000 + rand.Int63n(1000000),
-		GasUsed:     21000 + rand.Int63n(100000),
-		Status:      "success",
-	}
-
-	return tx, nil
+	Hash        string
+	ChainID     int
+	FromAddress string
+	ToAddress   string
+	Value       string
+	BlockNumber int64
+	GasUsed     int64
+	Status      string
 }
 
 // normalizeAndStore updates the transaction with normalized data
@@ -242,24 +291,6 @@ func (w *Worker) normalizeAndStore(ctx context.Context, txID string, data *Block
 	)
 
 	return err
-}
-
-// Helper functions to generate mock data
-
-func (w *Worker) generateAddress() string {
-	const chars = "0123456789abcdef"
-	addr := "0x"
-	for i := 0; i < 40; i++ {
-		addr += string(chars[rand.Intn(len(chars))])
-	}
-	return addr
-}
-
-func (w *Worker) generateValue() string {
-	// Generate value between 0.001 and 100 ETH (in wei)
-	base := rand.Int63n(100000000000000000)     // Up to 0.1 ETH
-	value := 1000000000000000 + base             // Add 0.001 ETH minimum
-	return fmt.Sprintf("%d", value)
 }
 
 // GetStats returns worker statistics (for monitoring)
