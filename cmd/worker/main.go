@@ -7,18 +7,24 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/Wuzu11517/TxnFlow/internal/blockchain"
 	"github.com/Wuzu11517/TxnFlow/internal/config"
 	"github.com/Wuzu11517/TxnFlow/internal/db"
 	"github.com/Wuzu11517/TxnFlow/internal/worker"
 )
 
 func main() {
-	log.Println("============================================================================")
 	log.Println("TxnFlow Transaction Processor Worker")
-	log.Println("============================================================================")
 
-	// Load configuration
 	cfg := config.Load()
+
+	// Validate Infura API key
+	if cfg.InfuraAPIKey == "" {
+		log.Println("⚠️  WARNING: INFURA_API_KEY not set")
+		log.Println("   Set environment variable INFURA_API_KEY to use real blockchain data")
+		log.Println("   Get a free API key at https://infura.io")
+		log.Fatal("Cannot start worker without INFURA_API_KEY")
+	}
 
 	// Connect to database
 	ctx := context.Background()
@@ -28,17 +34,23 @@ func main() {
 	}
 	defer pool.Close()
 
-	log.Printf("✅ Connected to database: %s", cfg.DatabaseURL)
+	log.Printf("Connected to database: %s", cfg.DatabaseURL)
+
+	// Initialize chain registry
+	chainRegistry := blockchain.NewChainRegistry(cfg.InfuraAPIKey)
+	supportedChains := chainRegistry.GetSupportedChains()
+	log.Printf("Supported chains: %v", supportedChains)
 
 	// Create worker
-	w := worker.NewWorker(pool)
-	log.Printf("⚙️  Worker configuration:")
+	w := worker.NewWorker(pool, chainRegistry)
+	log.Printf("Worker configuration:")
 	log.Printf("   - Poll interval: %v", w.PollInterval)
 	log.Printf("   - Batch size: %d", w.BatchSize)
+	log.Printf("   - Blockchain: Real Ethereum data via Infura")
 
 	// Print initial stats
 	if stats, err := w.GetStats(ctx); err == nil {
-		log.Println("📊 Current transaction status counts:")
+		log.Println("Current transaction status counts:")
 		for status, count := range stats {
 			log.Printf("   - %s: %d", status, count)
 		}
@@ -56,21 +68,19 @@ func main() {
 
 	// Wait for shutdown signal
 	<-sigChan
-	log.Println("\n🛑 Shutdown signal received, stopping worker...")
+	log.Println("\nShutdown signal received, stopping worker...")
 
 	// Stop worker gracefully
 	w.Stop()
 	cancel()
 
 	// Print final stats
-	log.Println("\n📊 Final transaction status counts:")
+	log.Println("\nFinal transaction status counts:")
 	if stats, err := w.GetStats(context.Background()); err == nil {
 		for status, count := range stats {
 			log.Printf("   - %s: %d", status, count)
 		}
 	}
 
-	log.Println("============================================================================")
 	log.Println("Worker stopped gracefully")
-	log.Println("============================================================================")
 }
