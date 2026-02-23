@@ -160,13 +160,11 @@ func (c *RPCClient) call(ctx context.Context, request JSONRPCRequest, response *
 	}
 	defer resp.Body.Close()
 
-	// Check HTTP status
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("RPC returned HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response
 	if err := json.NewDecoder(resp.Body).Decode(response); err != nil {
 		return fmt.Errorf("failed to decode response: %w", err)
 	}
