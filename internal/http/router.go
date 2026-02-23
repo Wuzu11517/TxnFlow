@@ -7,6 +7,8 @@ import (
 func Router(h *Handlers) *chi.Mux {
 	r := chi.NewRouter()
 
+	r.Use(RateLimitMiddleware)
+
 	r.Post("/transactions", h.CreateTransaction)
 	r.Get("/transactions", h.ListTransactions)
 	r.Get("/transactions/{hash}", h.GetTransaction)
