@@ -140,38 +140,6 @@ const CONFIG = {
 };
 ```
 
-## 🎨 Future UI Enhancements
-
-The current frontend is **fully functional** with a clean, professional look. Here are ideas for making it even cooler later:
-
-### Phase 1 Enhancements (Easy - 1-2 hours)
-- [ ] Dark mode toggle
-- [ ] Animated status transitions
-- [ ] Chart.js graphs (transactions over time)
-- [ ] Filtering by status/chain
-- [ ] Search by hash
-
-### Phase 2 Enhancements (Medium - 3-4 hours)
-- [ ] WebSocket real-time updates (no polling)
-- [ ] Transaction timeline visualization
-- [ ] Gas price trends chart
-- [ ] Export to CSV
-- [ ] Advanced filters panel
-
-### Phase 3 Enhancements (Advanced - 5+ hours)
-- [ ] React/Vue rewrite
-- [ ] D3.js network graph (address relationships)
-- [ ] Real-time notifications (browser push)
-- [ ] Multi-language support
-- [ ] PWA (installable app)
-
-## 📱 Browser Support
-
-- ✅ Chrome/Edge (latest)
-- ✅ Firefox (latest)
-- ✅ Safari (latest)
-- ✅ Mobile browsers (iOS Safari, Chrome Mobile)
-
 ## 🐛 Troubleshooting
 
 ### "Cannot connect to API"
